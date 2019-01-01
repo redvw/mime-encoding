@@ -4,7 +4,7 @@ LIB = $(LIBDIR)/libencoding.a
 OBJ = $(SRC:.c=.o)
 CCFLAGS  = -g -Wall -Wextra -pedantic
 ifdef DEBUG
-CCFLAGS += -Og
+CCFLAGS += -O0
 else
 CCFLAGS += -O3 -DNDEBUG
 endif

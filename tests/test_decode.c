@@ -1,6 +1,6 @@
 /***************************************************************************
  *  Unit tests for base64 and quoted-printable decoders
- *  Copyright (C) 2018  Ole Hansen <ole@redvw.com>
+ *  Copyright (C) 2018, 2019  Ole Hansen <ole@redvw.com>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License version 3 as
@@ -20,6 +20,7 @@
 #include <string.h>
 #include <assert.h>
 #include <libgen.h>
+#include <stdlib.h>
 #include "decode.h"
 
 #define bufsize 384
@@ -48,6 +49,9 @@ static const unsigned char text2[] = {
    235, 236, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248,
    249, 250, 251, 252, 253, 254, 255, 0 };
 
+static const char *text3 =
+   "Now's the time for all folk to come to the aid of their country.";
+
 /* Decoded binary data */
 static const unsigned char sequence[256] = {
    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
@@ -69,45 +73,40 @@ static const unsigned char sequence[256] = {
    249, 250, 251, 252, 253, 254, 255 };
 
 static const char* v123 = "123";
-static const int l123 = sizeof("123");
+static const size_t l123 = sizeof("123");
 
 /* Our testing "framework" ;) */
 #define check_return( ret, expected )                                   \
-   if( ret != expected ) {                                              \
-      if( ret < 0 ) {                                                   \
-         fprintf( stderr, "Test %d failed with code %d (\"%s\") "       \
-             "at line %d\n", ntot, ret, decode_perror(ret), __LINE__ ); \
-      } else {                                                          \
-         fprintf( stderr, "Test %d failed (return %d differs from "     \
-                  "expected %d) at line %d\n",                          \
-                  ntot, ret, expected, __LINE__ );                      \
-      }                                                                 \
+   if( (ret) != (expected) ) {                                          \
+      fprintf( stderr, "Test %d failed (return %d differs from "        \
+               "expected %d) at line %d\n",                             \
+               ntot, ret, expected, __LINE__ );                         \
    } else {                                                             \
       ngood++;                                                          \
    }                                                                    \
    ntot++;
 
 #define check_return_greater( ret, num )                                \
-   if( ret > num ) {                                                    \
+   if( (ret) > (num) ) {                                                \
       ngood++;                                                          \
    } else {                                                             \
       fprintf( stderr, "Test %d failed at line %d\n", ntot, __LINE__ ); \
    }                                                                    \
    ntot++;
 
-#define check_return_result( ret, nbytes, outbuf, value )               \
-   if( ret != nbytes ) {                                                \
-      if( ret < 0 ) {                                                   \
-         fprintf( stderr, "Test %d failed with code %d (\"%s\") "       \
-             "at line %d\n", ntot, ret, decode_perror(ret), __LINE__ ); \
-      } else {                                                          \
-         fprintf( stderr, "Test %d failed (return %d differs from "     \
-                  "expected %d) at line %d\n",                          \
-                  ntot, ret, nbytes, __LINE__ );                        \
-      }                                                                 \
+#define check_return_result( ret, expd, siz, nbytes, outbuf, value )    \
+   if( (ret) != (expd) ) {                                              \
+      fprintf( stderr, "Test %d failed (return %d differs from "        \
+               "expected %d) at line %d\n",                             \
+               ntot, ret, expd, __LINE__ );                             \
+   } else if( (siz) != (nbytes) ) {                                     \
+      fprintf( stderr, "Test %d failed (size %lu differs from "         \
+               "expected %lu) at line %d\n",                            \
+               ntot, (size_t)(siz), (size_t)(nbytes), __LINE__ );       \
    } else if( memcmp(outbuf, value, nbytes) != 0 ) {                    \
-      fprintf( stderr, "Test %d failed (output differs from expected "  \
-               "value) at line %d\n", ntot, __LINE__ );                 \
+      fprintf( stderr, "Test %d failed "                                \
+               "(output differs from expected value) at line %d\n",     \
+               ntot, __LINE__ );                                        \
    } else {                                                             \
       ngood++;                                                          \
    }                                                                    \
@@ -116,201 +115,285 @@ static const int l123 = sizeof("123");
 /* =================== quoted-printable tests =========================== */
 static int test_quoted_printable()
 {
-   char outbuf[bufsize];
+   char outbuf[bufsize], *allocbuf;
    int ret, ngood = 0;
+   size_t outlen;
    const char *input;
 
    /* Parameter validity */
-   ret = quoted_printable_decode( NULL, outbuf, bufsize );
-   check_return( ret, DECODE_BADARG );
-
-   ret = quoted_printable_decode( "", NULL, bufsize );
-   check_return( ret, DECODE_BADARG );
-
+   
    /* For checking whether the output buffer remains untouched */
    strcpy( outbuf, v123 );
 
+   outlen = bufsize;
+   ret = quoted_printable_decode( NULL, outbuf, &outlen );
+   check_return_result( ret, DECODE_BADARG, outlen, 0, outbuf, outbuf );
+   check_return_result( ret, DECODE_BADARG, l123, l123, outbuf, v123 );
+
+   outlen = bufsize;
+   ret = quoted_printable_decode( "foobar", NULL, &outlen );
+   check_return_result( ret, DECODE_BADARG, outlen, 0, outbuf, outbuf );
+
+   ret = quoted_printable_decode( "foobar", outbuf, NULL );
+   check_return_result( ret, DECODE_BADARG, l123, l123, outbuf, v123 );
+
    /* Trivial inputs */
-   ret = quoted_printable_decode( "", outbuf, bufsize );
-   check_return( ret, 0 );
-   check_return_result( l123, l123, outbuf, v123 );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 0, outbuf, outbuf );
+   check_return_result( ret, DECODE_SUCCESS, l123, l123, outbuf, v123 );
 
-   ret = quoted_printable_decode( "\r\n", outbuf, bufsize );
-   check_return_result( ret, 2, outbuf, "\r\n" );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "\r\n", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 2, outbuf, "\r\n" );
 
-   ret = quoted_printable_decode( "\n", outbuf, bufsize );
-   check_return( ret, DECODE_INVALID_CHAR );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "\n", outbuf, &outlen );
+   check_return_result( ret, DECODE_INVALID_CHAR, outlen, 0, outbuf, outbuf );
 
-   ret = quoted_printable_decode_mode( "\n", outbuf, bufsize,
+   outlen = bufsize;
+   ret = quoted_printable_decode_mode( "\n", outbuf, &outlen,
                                        DECODE_MODE_LF_BREAKS );
-   check_return_result( ret, 1, outbuf, "\n" );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 1, outbuf, "\n" );
 
    /* Valid unencoded (literal) characters */
-   input = " \t!\"#$%&'()*+,-./0123456789:;<>?@";
-   ret = quoted_printable_decode( input, outbuf, bufsize );
-   check_return_result( ret, (int)strlen(input), outbuf, input );
+   input = " \t!\"#$%&'()*+,-./0123456789:;<>?@\r\n";
+   outlen = bufsize;
+   ret = quoted_printable_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, strlen(input), outbuf, input );
 
+   ret = quoted_printable_decode_alloc( input, &allocbuf, &outlen,
+      DECODE_MODE_STRICT );
+   check_return_result( ret, DECODE_SUCCESS, outlen, strlen(input), allocbuf, input );
+   free(allocbuf);
+
+   /* Split into two strings to stay within 76 character length limit */
    input = "ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}";
-   ret = quoted_printable_decode( input, outbuf, bufsize );
-   check_return_result( ret, (int)strlen(input), outbuf, input );
+   outlen = bufsize;
+   ret = quoted_printable_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, strlen(input), outbuf, input );
 
-   ret = quoted_printable_decode( "ab cd", outbuf, bufsize );
-   check_return_result( ret, 5, outbuf, "ab cd" );
+   ret = quoted_printable_decode_alloc( input, &allocbuf, &outlen,
+      DECODE_MODE_STRICT );
+   check_return_result( ret, DECODE_SUCCESS, outlen, strlen(input), allocbuf, input );
+   free(allocbuf);
 
    /* Invalid characters */
    /* At least one character in text2 is invalid */
-   ret = quoted_printable_decode( (const char*)text2, outbuf, bufsize );
-   check_return( ret, DECODE_INVALID_CHAR );
+   outlen = bufsize;
+   ret = quoted_printable_decode( (const char*)text2, outbuf, &outlen );
+   check_return_result( ret, DECODE_INVALID_CHAR, outlen, 0, outbuf, outbuf );
 
    /* All characters in text2 are invalid */
    /* (text2 includes both \r and \n, but not as a \r\n pair) */
-   ret = quoted_printable_decode_mode( (const char*)text2, outbuf, bufsize,
+   outlen = bufsize;
+   ret = quoted_printable_decode_mode( (const char*)text2, outbuf, &outlen,
       DECODE_MODE_INVALID_CHAR );
-   check_return_result( ret, 0, outbuf, "" );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 0, outbuf, "" );
 
    /* Some characters are not invalid */
-   ret = quoted_printable_decode_mode( (const char*)text2, outbuf, bufsize,
+   outlen = bufsize;
+   ret = quoted_printable_decode_mode( (const char*)text2, outbuf, &outlen,
       DECODE_MODE_ROBUST );
-   check_return_result( ret, 1, outbuf, "\n" );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 1, outbuf, "\n" );
 
-   ret = quoted_printable_decode_mode( "Schöne Grüße", outbuf, bufsize,
+   outlen = bufsize;
+   ret = quoted_printable_decode_mode( "Schöne Grüße", outbuf, &outlen,
       DECODE_MODE_ROBUST );
-   check_return_result( ret, 9, outbuf, "Schne Gre" );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 9, outbuf, "Schne Gre" );
 
    /* Encoded characters */
-   ret = quoted_printable_decode( "=41", outbuf, bufsize );
-   check_return_result( ret, 1, outbuf, "A" );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "=41", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 1, outbuf, "A" );
 
-   ret = quoted_printable_decode( "=41=42", outbuf, bufsize );
-   check_return_result( ret, 2, outbuf, "AB" );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "=41=42", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 2, outbuf, "AB" );
 
-   ret = quoted_printable_decode( "=61 =62", outbuf, bufsize );
-   check_return_result( ret, 3, outbuf, "a b" );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "=61 =62", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 3, outbuf, "a b" );
 
-   ret = quoted_printable_decode( "=C3=89=C3=96=C3=A8=C3=BF=C3=A5=C3=A7",
-                                  outbuf, bufsize );
-   check_return_result( ret, 12, outbuf, "ÉÖèÿåç" );
+   outlen = bufsize;
+   input = "=C3=89=C3=96=C3=A8=C3=BF=C3=A5=C3=A7";
+   ret = quoted_printable_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 12, outbuf, "ÉÖèÿåç" );
+
+   ret = quoted_printable_decode_alloc( input, &allocbuf, &outlen,
+      DECODE_MODE_STRICT );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 12, allocbuf, "ÉÖèÿåç" );
+   free(allocbuf);
 
    /* Malformed sequences */
-   ret = quoted_printable_decode( "=", outbuf, bufsize );
-   check_return( ret, DECODE_MALFORMED_SEQUENCE );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "=", outbuf, &outlen );
+   check_return_result( ret, DECODE_MALFORMED_SEQUENCE, outlen, 0, outbuf, outbuf );
 
-   ret = quoted_printable_decode( "=A", outbuf, bufsize );
-   check_return( ret, DECODE_MALFORMED_SEQUENCE );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "=A", outbuf, &outlen );
+   check_return_result( ret, DECODE_MALFORMED_SEQUENCE, outlen, 0, outbuf, outbuf );
 
-   ret = quoted_printable_decode( "=9a", outbuf, bufsize );
-   check_return( ret, DECODE_LOWERCASE_HEX );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "=9a", outbuf, &outlen );
+   check_return_result( ret, DECODE_LOWERCASE_HEX, outlen, 0, outbuf, outbuf );
 
-   ret = quoted_printable_decode_mode( "=9a", outbuf, bufsize,
+   outlen = bufsize;
+   ret = quoted_printable_decode_mode( "=9a", outbuf, &outlen,
       DECODE_MODE_LITERAL_EQ );
-   check_return( ret, DECODE_LOWERCASE_HEX);
+   check_return_result( ret, DECODE_LOWERCASE_HEX, outlen, 0, outbuf, outbuf );
 
-   ret = quoted_printable_decode_mode( "=9a", outbuf, bufsize,
+   outlen = bufsize;
+   ret = quoted_printable_decode_mode( "=9a", outbuf, &outlen,
       DECODE_MODE_LC_HEX );
-   check_return_result( ret, 1, outbuf, "\232" );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 1, outbuf, "\232" );
 
-   ret = quoted_printable_decode( "=HI", outbuf, bufsize );
-   check_return( ret, DECODE_MALFORMED_SEQUENCE );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "=HI", outbuf, &outlen );
+   check_return_result( ret, DECODE_MALFORMED_SEQUENCE, outlen, 0, outbuf, outbuf );
 
-   ret = quoted_printable_decode_mode( "=HI", outbuf, bufsize,
+   outlen = bufsize;
+   ret = quoted_printable_decode_mode( "=HI", outbuf, &outlen,
       DECODE_MODE_ROBUST );
-   check_return_result( ret, 3, outbuf, "=HI" );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 3, outbuf, "=HI" );
 
-   ret = quoted_printable_decode( "abc=", outbuf, bufsize );
-   check_return( ret, DECODE_MALFORMED_SEQUENCE );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "abc=", outbuf, &outlen );
+   check_return_result( ret, DECODE_MALFORMED_SEQUENCE, outlen, 3, outbuf, "abc" );
 
-   ret = quoted_printable_decode( "abc=C3=D", outbuf, bufsize );
-   check_return( ret, DECODE_MALFORMED_SEQUENCE );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "abc=C3=D", outbuf, &outlen );
+   check_return_result( ret, DECODE_MALFORMED_SEQUENCE, outlen, 4, outbuf, "abc\303" );
 
-   ret = quoted_printable_decode_mode( "abc=", outbuf, bufsize,
+   outlen = bufsize;
+   ret = quoted_printable_decode_mode( "abc=", outbuf, &outlen,
       DECODE_MODE_ROBUST );
-   check_return_result( ret, 4, outbuf, "abc=" );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 4, outbuf, "abc=" );
 
-   ret = quoted_printable_decode_mode( "abc=C3=D", outbuf, bufsize,
+   outlen = bufsize;
+   ret = quoted_printable_decode_mode( "abc=C3=D", outbuf, &outlen,
       DECODE_MODE_ROBUST );
-   check_return_result( ret, 6, outbuf, "abc\303=D" );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 6, outbuf, "abc\303=D" );
 
+   outlen = bufsize;
    ret = quoted_printable_decode( "=c3=89=c3=96=c3=a8=c3=bf=c3=a5=c3=a7",
-                                  outbuf, bufsize );
-   check_return( ret, DECODE_LOWERCASE_HEX );
+                                  outbuf, &outlen );
+   check_return_result( ret, DECODE_LOWERCASE_HEX, outlen, 0, outbuf, outbuf );
 
+   outlen = bufsize;
    ret = quoted_printable_decode_mode( "=c3=89=c3=96=c3=a8=c3=bf=c3=a5=c3=a7",
-      outbuf, bufsize, DECODE_MODE_LC_HEX );
-   check_return_result( ret, 12, outbuf, "ÉÖèÿåç" );
+      outbuf, &outlen, DECODE_MODE_LC_HEX );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 12, outbuf, "ÉÖèÿåç" );
 
+   outlen = bufsize;
    ret = quoted_printable_decode_mode( "=c3=89=c3=96=c3=a8=c3=bf=c3=a5=c3=a7",
-      outbuf, bufsize, DECODE_MODE_LITERAL_EQ );
-   check_return( ret, DECODE_LOWERCASE_HEX );
+      outbuf, &outlen, DECODE_MODE_LITERAL_EQ );
+   check_return_result( ret, DECODE_LOWERCASE_HEX, outlen, 0, outbuf, outbuf );
 
+   outlen = bufsize;
    ret = quoted_printable_decode_mode( "=c3=89=c3=96=c3=a8=c3=bf=c3=a5=c3=a7",
-      outbuf, bufsize, DECODE_MODE_ROBUST );
-   check_return_result( ret, 12, outbuf, "ÉÖèÿåç" );
+      outbuf, &outlen, DECODE_MODE_ROBUST );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 12, outbuf, "ÉÖèÿåç" );
 
    /* Soft breaks */
-   ret = quoted_printable_decode( "abc=\r\ndef", outbuf, bufsize );
-   check_return_result( ret, 6, outbuf, "abcdef" );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "abc=\r\ndef", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 6, outbuf, "abcdef" );
 
-   ret = quoted_printable_decode( "abc =\r\ndef", outbuf, bufsize );
-   check_return_result( ret, 7, outbuf, "abc def" );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "abc =\r\ndef", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 7, outbuf, "abc def" );
 
-   ret = quoted_printable_decode( "abc\t =\r\ndef", outbuf, bufsize );
-   check_return_result( ret, 8, outbuf, "abc\t def" );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "abc\t =\r\ndef", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 8, outbuf, "abc\t def" );
 
-   ret = quoted_printable_decode( "abc=\r\ndef=\r\n", outbuf, bufsize );
-   check_return_result( ret, 6, outbuf, "abcdef" );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "abc=\r\ndef=\r\n", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 6, outbuf, "abcdef" );
 
-   ret = quoted_printable_decode( "abc=\ndef=\n", outbuf, bufsize );
-   check_return( ret, DECODE_MALFORMED_SEQUENCE );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "abc=\ndef=\n", outbuf, &outlen );
+   check_return_result( ret, DECODE_MALFORMED_SEQUENCE, outlen, 3, outbuf, "abc" );
 
-   ret = quoted_printable_decode_mode( "abc=\ndef=\n", outbuf, bufsize,
+   outlen = bufsize;
+   ret = quoted_printable_decode_mode( "abc=\ndef=\n", outbuf, &outlen,
       DECODE_MODE_LF_BREAKS );
-   check_return_result( ret, 6, outbuf, "abcdef" );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 6, outbuf, "abcdef" );
 
-   ret = quoted_printable_decode( "abc=  \r\ndef", outbuf, bufsize );
-   check_return( ret, DECODE_WHITESPACE_IN_SOFTBREAK );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "abc=  \r\ndef", outbuf, &outlen );
+   check_return_result( ret, DECODE_WHITESPACE_IN_SOFTBREAK, outlen, 3,
+      outbuf, "abc" );
 
-   ret = quoted_printable_decode_mode( "abc=  \r\ndef", outbuf, bufsize,
+   outlen = bufsize;
+   input = "abc=  \r\ndef";
+   ret = quoted_printable_decode_mode( input, outbuf, &outlen,
       DECODE_MODE_WHITESPACE_OK );
-   check_return_result( ret, 6, outbuf, "abcdef" );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 6, outbuf, "abcdef" );
+
+   ret = quoted_printable_decode_alloc( input, &allocbuf, &outlen,
+      DECODE_MODE_WHITESPACE_OK );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 6, allocbuf, "abcdef" );
+   free(allocbuf);
 
    input = "Now's the time =\t\t  \r\n"
       "for all folk to come=\t\r\n"
       " to the aid of their country.";
-   ret = quoted_printable_decode_mode( input, outbuf, bufsize,
+   outlen = bufsize;
+   ret = quoted_printable_decode_mode( input, outbuf, &outlen,
        DECODE_MODE_WHITESPACE_OK );
-   check_return_result( ret, 64, outbuf,
-       "Now's the time for all folk to come to the aid of their country." );
+   check_return_result( ret, DECODE_SUCCESS, outlen, strlen(text3),
+       outbuf, text3 );
 
-   ret = quoted_printable_decode_mode( "abc=  ", outbuf, bufsize,
+   ret = quoted_printable_decode_alloc( input, &allocbuf, &outlen,
       DECODE_MODE_WHITESPACE_OK );
-   check_return( ret, DECODE_MALFORMED_SEQUENCE );
+   check_return_result( ret, DECODE_SUCCESS, outlen, strlen(text3),
+      allocbuf, text3 );
+   free(allocbuf);
+
+   outlen = bufsize;
+   ret = quoted_printable_decode_mode( "abc=  ", outbuf, &outlen,
+      DECODE_MODE_WHITESPACE_OK );
+   check_return_result( ret, DECODE_MALFORMED_SEQUENCE, outlen, 3,
+      outbuf, "abc" );
 
    /* Space padding deletion */
-   ret = quoted_printable_decode( " ", outbuf, bufsize );
-   check_return_result( ret, 0, outbuf, "" );
+   outlen = bufsize;
+   ret = quoted_printable_decode( " ", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 0, outbuf, "" );
 
-   ret = quoted_printable_decode( "    \t  ", outbuf, bufsize );
-   check_return_result( ret, 0, outbuf, "" );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "    \t  ", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 0, outbuf, "" );
 
-   ret = quoted_printable_decode( "abc   ", outbuf, bufsize );
-   check_return_result( ret, 3, outbuf, "abc" );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "abc   ", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 3, outbuf, "abc" );
 
-   ret = quoted_printable_decode( "abc=20=20=20", outbuf, bufsize );
-   check_return_result( ret, 6, outbuf, "abc   " );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "abc=20=20=20", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 6, outbuf, "abc   " );
 
-   ret = quoted_printable_decode( "abc   \r\n", outbuf, bufsize );
-   check_return_result( ret, 5, outbuf, "abc\r\n" );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "abc   \r\n", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 5, outbuf, "abc\r\n" );
 
-   ret = quoted_printable_decode( "abc=20=20=20\r\n", outbuf, bufsize );
-   check_return_result( ret, 8, outbuf, "abc   \r\n" );
+   outlen = bufsize;
+   ret = quoted_printable_decode( "abc=20=20=20\r\n", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 8, outbuf, "abc   \r\n" );
 
+   outlen = bufsize;
    ret = quoted_printable_decode( "abc   \r\n def ghi \t \r\n",
-      outbuf, bufsize );
-   check_return_result( ret, 15, outbuf, "abc\r\n def ghi\r\n" );
+      outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 15, outbuf,
+      "abc\r\n def ghi\r\n" );
 
+   outlen = bufsize;
    ret = quoted_printable_decode_mode( "abc   \n def ghi \t \n",
-      outbuf, bufsize, DECODE_MODE_LF_BREAKS );
-   check_return_result( ret, 13, outbuf, "abc\n def ghi\n" );
+      outbuf, &outlen, DECODE_MODE_LF_BREAKS );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 13, outbuf,
+      "abc\n def ghi\n" );
 
    /* Encoded binary blob */
    input = "=00=01=02"
@@ -326,8 +409,14 @@ static int test_quoted_printable()
       "=C9=CA=CB=CC=CD=CE=CF=D0=D1=D2=D3=D4=D5=D6=D7=D8=D9=DA=DB=DC=DD=DE=\r\n"
       "=DF=E0=E1=E2=E3=E4=E5=E6=E7=E8=E9=EA=EB=EC=ED=EE=EF=F0=F1=F2=F3=F4=\r\n"
       "=F5=F6=F7=F8=F9=FA=FB=FC=FD=FE=FF";
-   ret = quoted_printable_decode( input, outbuf, bufsize );
-   check_return_result( ret, 256, outbuf, sequence );
+   outlen = bufsize;
+   ret = quoted_printable_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 256, outbuf, sequence );
+
+   ret = quoted_printable_decode_alloc( input, &allocbuf, &outlen,
+      DECODE_MODE_WHITESPACE_OK );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 256, allocbuf, sequence );
+   free(allocbuf);
 
    /* Encoded text passages */
    input =
@@ -336,95 +425,133 @@ static int test_quoted_printable()
 "'un moyen, et te trompant ainsi sur la route =C3=A0 suivre les voil=C3=A0 b=\r\n"
 "ient=C3=B4t qui te d=C3=A9gradent, car si leur musique est vulgaire ils te =\r\n"
 "fabriquent pour te la vendre une =C3=A2me vulgaire.\r\n";
-   ret = quoted_printable_decode( input, outbuf, bufsize );
-   check_return_result( ret, (int)strlen(text1), outbuf, text1 );
+   outlen = bufsize;
+   ret = quoted_printable_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, strlen(text1), outbuf, text1 );
+
+   ret = quoted_printable_decode_alloc( input, &allocbuf, &outlen,
+      DECODE_MODE_WHITESPACE_OK );
+   check_return_result( ret, DECODE_SUCCESS, outlen, strlen(text1), allocbuf, text1 );
+   free(allocbuf);
 
    /* Line length */
    input = "J'interdis aux marchands de vanter trop leurs marchandises. "
       "Car ils se font=\r\n";
-   ret = quoted_printable_decode( input, outbuf, bufsize );
-   check_return_result( ret, 75, outbuf,
+   outlen = bufsize;
+   ret = quoted_printable_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 75, outbuf,
       "J'interdis aux marchands de vanter trop leurs marchandises. "
       "Car ils se font" );
 
    input = "J'interdis aux marchands de vanter trop leurs marchandises. "
       "Car ils se  font\r\n";
-   ret = quoted_printable_decode( input, outbuf, bufsize );
-   check_return_result( ret, 78, outbuf, input )
+   outlen = bufsize;
+   ret = quoted_printable_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 78, outbuf, input )
 
    input = "J'interdis aux marchands de vanter trop leurs marchandises. "
       "Car ils se  font \r\n";
-   ret = quoted_printable_decode( input, outbuf, bufsize );
-   check_return( ret, DECODE_LINE_TOO_LONG );
+   outlen = bufsize;
+   ret = quoted_printable_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_LINE_TOO_LONG, outlen, 76, outbuf, input );
 
    input = "J'interdis aux marchands de vanter trop leurs marchandises. "
       "Car ils se font v\r\n";
-   ret = quoted_printable_decode( input, outbuf, bufsize );
-   check_return( ret, DECODE_LINE_TOO_LONG );
+   outlen = bufsize;
+   ret = quoted_printable_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_LINE_TOO_LONG, outlen, 76, outbuf, input );
 
    input = "J'interdis aux marchands de vanter trop leurs marchandises. "
       "Car ils se font =\r\n";
-   ret = quoted_printable_decode( input, outbuf, bufsize );
-   check_return( ret, DECODE_LINE_TOO_LONG );
+   outlen = bufsize;
+   ret = quoted_printable_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_LINE_TOO_LONG, outlen, 76, outbuf, input );
 
    input = "J'interdis aux marchands de vanter trop leurs marchandises. "
       "Car ils se font =\r\n";
-   ret = quoted_printable_decode_mode( input, outbuf, bufsize,
+   outlen = bufsize;
+   ret = quoted_printable_decode_mode( input, outbuf, &outlen,
       DECODE_MODE_LONG_LINES );
-   check_return_result( ret, 76, outbuf,
+   check_return_result( ret, DECODE_SUCCESS, outlen, 76, outbuf,
       "J'interdis aux marchands de vanter trop leurs marchandises. "
       "Car ils se font " );
 
    input = "J'interdis aux marchands de vanter trop leurs marchandises. "
       "Car ils se font=20";
-   ret = quoted_printable_decode( input, outbuf, bufsize );
-   check_return( ret, DECODE_LINE_TOO_LONG );
+   outlen = bufsize;
+   ret = quoted_printable_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_LINE_TOO_LONG, outlen, 75, outbuf, input );
 
    /* Buffer length */
    input = "J'interdis aux marchands de vanter trop leurs marchandises";
-   ret = quoted_printable_decode( input, outbuf, 58 );
-   check_return_result( ret, 58, outbuf,
+   outlen = 58;
+   ret = quoted_printable_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 58, outbuf,
       "J'interdis aux marchands de vanter trop leurs marchandises" );
 
    input = "J'interdis aux marchands de vanter trop leurs marchandises.";
-   ret = quoted_printable_decode( input, outbuf, 58 );
-   check_return( ret, DECODE_BUFFER_TOO_SMALL );
+   outlen = 58;
+   ret = quoted_printable_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_BUFFER_TOO_SMALL, outlen, 58, outbuf, input );
 
    /* "Encoded words */
    input = "Keith_Moore";
-   ret = quoted_printable_word_decode( input, outbuf, bufsize );
-   check_return_result( ret, (int)strlen(input), outbuf, "Keith Moore" );
+   outlen = bufsize;
+   ret = quoted_printable_word_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, strlen(input), outbuf,
+      "Keith Moore" );
 
    input = "Keld_J=F8rn_Simonsen";
-   ret = quoted_printable_word_decode( input, outbuf, bufsize );
-   check_return_result( ret, (int)strlen(input)-2, outbuf,
+   outlen = bufsize;
+   ret = quoted_printable_word_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, strlen(input)-2, outbuf,
       "Keld J\370rn Simonsen" );
 
    input = "Patrik_F=E4ltstr=F6m";
-   ret = quoted_printable_word_decode( input, outbuf, bufsize );
-   check_return_result( ret, (int)strlen(input)-4, outbuf,
+   outlen = bufsize;
+   ret = quoted_printable_word_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, strlen(input)-4, outbuf,
       "Patrik F\344ltstr\366m" );
 
-   /* "encoded word" mode uses relaxed rules by default */
+   /* "encoded word" mode allows lowercase hex by default */
    input = "Verschl=c3=bcsselte_Nachricht";
-   ret = quoted_printable_word_decode( input, outbuf, bufsize );
-   check_return_result( ret, (int)strlen(input)-4, outbuf,
+   outlen = bufsize;
+   ret = quoted_printable_word_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, strlen(input)-4, outbuf,
       "Verschlüsselte Nachricht" );
+
+   /* encoded words may not contain whitespace */
+   input = "Verschl=c3=bcsselte Nachricht";
+   outlen = bufsize;
+   ret = quoted_printable_word_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_INVALID_CHAR, outlen, 15, outbuf,
+      "Verschlüsselte" );
 
    /* Encoded control characters OK, even in "word" mode */
    input = "Ver=0Dschl=c3=bcsselte_Nachricht=0D=0A";
-   ret = quoted_printable_word_decode( input, outbuf, bufsize );
-   check_return_result( ret, (int)strlen(input)-10, outbuf,
+   outlen = bufsize;
+   ret = quoted_printable_word_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, strlen(input)-10, outbuf,
       "Ver\rschlüsselte Nachricht\r\n" );
 
-   /* Question mark illegal in word mode unless overridden */
-   input = "Really?";
-   ret = quoted_printable_word_decode( input, outbuf, bufsize );
-   check_return( ret, DECODE_INVALID_CHAR );
+   ret = quoted_printable_decode_alloc( input, &allocbuf, &outlen,
+      DECODE_MODE_ENCODEDWORD | DECODE_MODE_LC_HEX );
+   check_return_result( ret, DECODE_SUCCESS, outlen, strlen(input)-10,
+      allocbuf, "Ver\rschlüsselte Nachricht\r\n" );
+   free(allocbuf);
 
-   ret = quoted_printable_decode_mode( input, outbuf, bufsize,
+   /* Question mark illegal in word mode. Skip with DECODE_MODE_INVALID_CHAR */
+   input = "Really=3F?=20Yes!";
+   outlen = bufsize;
+   ret = quoted_printable_word_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_INVALID_CHAR, outlen, 7, outbuf,
+      "Really?" );
+
+   outlen = bufsize;
+   ret = quoted_printable_decode_mode( input, outbuf, &outlen,
       DECODE_MODE_ENCODEDWORD | DECODE_MODE_INVALID_CHAR );
-   check_return_result( ret, (int)strlen(input), outbuf, input );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 12, outbuf,
+      "Really? Yes!" );
 
    return ngood;
 }
@@ -432,136 +559,181 @@ static int test_quoted_printable()
 /* ========================= base64 tests================================ */
 static int test_base64()
 {
-   char outbuf[bufsize];
+   char outbuf[bufsize], *allocbuf;
    int ret, ngood = 0;
    const char *input;
+   size_t outlen;
 
    /* Parameter validity */
-   ret = base64_decode( NULL, outbuf, bufsize );
+   outlen = bufsize;
+   ret = base64_decode( NULL, outbuf, &outlen );
    check_return( ret, DECODE_BADARG );
 
-   ret = base64_decode( "", NULL, bufsize );
+   outlen = bufsize;
+   ret = base64_decode( "", NULL, &outlen );
    check_return( ret, DECODE_BADARG );
 
    /* For checking whether the output buffer remains untouched */
    strcpy( outbuf, v123 );
 
    /* Trivial inputs */
-   ret = base64_decode( "", outbuf, bufsize );
-   check_return( ret, 0 );
-   check_return_result( l123, l123, outbuf, v123 );
+   outlen = bufsize;
+   ret = base64_decode( "", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, l123, l123, outbuf, v123 );
 
-   ret = base64_decode( "\r\n", outbuf, bufsize );
-   check_return( ret, 0 );
-   check_return_result( l123, l123, outbuf, v123 );
+   /* Accepting CRLF line breaks must be explicitly requested */
+   outlen = bufsize;
+   ret = base64_decode_mode( "\r\n", outbuf, &outlen, DECODE_MODE_CRLF_BREAKS );
+   check_return_result( ret, DECODE_SUCCESS, l123, l123, outbuf, v123 );
+
+   outlen = bufsize;
+   ret = base64_decode( "\r\n", outbuf, &outlen );
+   check_return_result( ret, DECODE_INVALID_CHAR, l123, l123, outbuf, v123 );
 
    /* Whitespace OK in relaxed mode only */
-   ret = base64_decode( " ", outbuf, bufsize );
-   check_return( ret, DECODE_INVALID_CHAR );
-   check_return_result( l123, l123, outbuf, v123 );
+   outlen = bufsize;
+   ret = base64_decode( " ", outbuf, &outlen );
+   check_return_result( ret, DECODE_INVALID_CHAR, l123, l123, outbuf, v123 );
 
-   ret = base64_decode_mode( " ", outbuf, bufsize, DECODE_MODE_RELAXED );
-   check_return( ret, 0 );
-   check_return_result( l123, l123, outbuf, v123 );
+   outlen = bufsize;
+   ret = base64_decode_mode( " ", outbuf, &outlen, DECODE_MODE_RELAXED );
+   check_return_result( ret, DECODE_SUCCESS, l123, l123, outbuf, v123 );
 
-   ret = base64_decode_mode( "\n", outbuf, bufsize, DECODE_MODE_WHITESPACE_OK );
-   check_return( ret, 0 );
-   check_return_result( l123, l123, outbuf, v123 );
+   outlen = bufsize;
+   ret = base64_decode_mode( "\n", outbuf, &outlen, DECODE_MODE_WHITESPACE_OK );
+   check_return_result( ret, DECODE_SUCCESS, l123, l123, outbuf, v123 );
 
-   ret = base64_decode_mode( "\n", outbuf, bufsize, DECODE_MODE_LF_BREAKS );
-   check_return( ret, 0 );
-   check_return_result( l123, l123, outbuf, v123 );
+   outlen = bufsize;
+   ret = base64_decode_mode( "\n", outbuf, &outlen, DECODE_MODE_LF_BREAKS );
+   check_return_result( ret, DECODE_SUCCESS, l123, l123, outbuf, v123 );
 
-   ret = base64_decode_mode( "    \t  ", outbuf, bufsize, DECODE_MODE_RELAXED );
-   check_return( ret, 0 );
-   check_return_result( l123, l123, outbuf, v123 );
+   outlen = bufsize;
+   ret = base64_decode_mode( "    \t  ", outbuf, &outlen, DECODE_MODE_RELAXED );
+   check_return_result( ret, DECODE_SUCCESS, l123, l123, outbuf, v123 );
 
-   ret = base64_decode_mode( "   \t\n\t  \r\n\t", outbuf, bufsize,
+   outlen = bufsize;
+   ret = base64_decode_mode( "   \t\n\t  \r\n\t", outbuf, &outlen,
                              DECODE_MODE_RELAXED );
-   check_return( ret, 0 );
-   check_return_result( l123, l123, outbuf, v123 );
+   check_return_result( ret, DECODE_SUCCESS, l123, l123, outbuf, v123 );
 
-   /* Basic decoding (successes) */
-   ret = base64_decode( "QQ==", outbuf, bufsize );
-   check_return_result( ret, 1, outbuf, "A" );
+   /* Basic decoding: RFC 4648 test vectors */
+   outlen = bufsize;
+   ret = base64_decode( "Zg==", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 1, outbuf, "f" );
 
-   ret = base64_decode( "QUI=", outbuf, bufsize );
-   check_return_result( ret, 2, outbuf, "AB" );
+   outlen = bufsize;
+   ret = base64_decode( "Zm8=", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 2, outbuf, "fo" );
 
-   ret = base64_decode( "QUJD", outbuf, bufsize );
-   check_return_result( ret, 3, outbuf, "ABC" );
+   outlen = bufsize;
+   ret = base64_decode( "Zm9v", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 3, outbuf, "foo" );
 
-   ret = base64_decode( "QUJDRA==", outbuf, bufsize );
-   check_return_result( ret, 4, outbuf, "ABCD" );
+   outlen = bufsize;
+   ret = base64_decode( "Zm9vYg==", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 4, outbuf, "foob" );
+
+   outlen = bufsize;
+   ret = base64_decode( "Zm9vYmE=", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 5, outbuf, "fooba" );
+
+   outlen = bufsize;
+   ret = base64_decode( "Zm9vYmFy", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 6, outbuf, "foobar" );
+
+   ret = base64_decode_alloc( "Zm9vYmFy", &allocbuf, &outlen, DECODE_MODE_STRICT );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 6, outbuf, "foobar" );
+   free(allocbuf);
 
    /* Stop decoding at NULL (success) */
-   ret = base64_decode( "QQ==\0QUJD", outbuf, bufsize );
-   check_return_result( ret, 1, outbuf, "A" );
+   outlen = bufsize;
+   ret = base64_decode( "QQ==\0QUJD", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 1, outbuf, "A" );
 
    /* Embedded whitespace in relaxed mode (success) */
-   ret = base64_decode_mode( "QU JD", outbuf, bufsize, DECODE_MODE_RELAXED );
-   check_return_result( ret, 3, outbuf, "ABC" );
+   outlen = bufsize;
+   ret = base64_decode_mode( "QU JD", outbuf, &outlen, DECODE_MODE_RELAXED );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 3, outbuf, "ABC" );
 
-   ret = base64_decode_mode( "QU J  D \n ", outbuf, bufsize, DECODE_MODE_RELAXED );
-   check_return_result( ret, 3, outbuf, "ABC" );
+   outlen = bufsize;
+   ret = base64_decode_mode( "QU J  D \n ", outbuf, &outlen, DECODE_MODE_RELAXED );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 3, outbuf, "ABC" );
 
-   ret = base64_decode_mode( "QU\nJD", outbuf, bufsize, DECODE_MODE_RELAXED );
-   check_return_result( ret, 3, outbuf, "ABC" );
+   outlen = bufsize;
+   ret = base64_decode_mode( "QU\nJD", outbuf, &outlen, DECODE_MODE_RELAXED );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 3, outbuf, "ABC" );
 
    /* Invalid characters (failures) */
-   ret = base64_decode( "Q@JD", outbuf, bufsize );
-   check_return( ret, DECODE_INVALID_CHAR );
+   outlen = bufsize;
+   ret = base64_decode( "Q@JD", outbuf, &outlen );
+   check_return_result( ret, DECODE_INVALID_CHAR, outlen, 0, outbuf, outbuf );
 
-   ret = base64_decode( "QUJD*", outbuf, bufsize );
-   check_return( ret, DECODE_INVALID_CHAR );
+   outlen = bufsize;
+   ret = base64_decode( "QUJD*", outbuf, &outlen );
+   check_return_result( ret, DECODE_INVALID_CHAR, outlen, 3, outbuf, "ABC" );
 
    /* Leading and trailing whitespace (failure/sucess) */
-   ret = base64_decode( "QQ== ", outbuf, bufsize );
-   check_return( ret, DECODE_INVALID_CHAR );
+   outlen = bufsize;
+   ret = base64_decode( "QQ== ", outbuf, &outlen );
+   check_return_result( ret, DECODE_INVALID_CHAR, outlen, 1, outbuf, "A" );
 
-   ret = base64_decode( "QUI= ", outbuf, bufsize );
-   check_return( ret, DECODE_INVALID_CHAR);
+   outlen = bufsize;
+   ret = base64_decode( "QUI= ", outbuf, &outlen );
+   check_return_result( ret, DECODE_INVALID_CHAR, outlen, 2, outbuf, "AB");
 
-   ret = base64_decode( "\tQUI= \n   ", outbuf, bufsize );
-   check_return( ret, DECODE_INVALID_CHAR );
+   outlen = bufsize;
+   ret = base64_decode( "\tQUI= \n   ", outbuf, &outlen );
+   check_return_result( ret, DECODE_INVALID_CHAR, outlen, 0, outbuf, outbuf );
 
-   ret = base64_decode( "QUJD    ", outbuf, bufsize );
-   check_return( ret, DECODE_INVALID_CHAR );
+   outlen = bufsize;
+   ret = base64_decode( "QUJD    ", outbuf, &outlen );
+   check_return_result( ret, DECODE_INVALID_CHAR, outlen, 3, outbuf, "ABC"  );
 
-   ret = base64_decode( "\tQUJD", outbuf, bufsize );
-   check_return( ret, DECODE_INVALID_CHAR );
+   outlen = bufsize;
+   ret = base64_decode( "\tQUJD", outbuf, &outlen );
+   check_return_result( ret, DECODE_INVALID_CHAR, outlen, 0, outbuf, outbuf );
 
-   ret = base64_decode_mode( "QQ== ", outbuf, bufsize, DECODE_MODE_RELAXED );
-   check_return_result( ret, 1, outbuf, "A" );
+   outlen = bufsize;
+   ret = base64_decode_mode( "QQ== ", outbuf, &outlen, DECODE_MODE_RELAXED );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 1, outbuf, "A" );
 
-   ret = base64_decode_mode( "QUI= ", outbuf, bufsize, DECODE_MODE_RELAXED );
-   check_return_result( ret, 2, outbuf, "AB" );
+   outlen = bufsize;
+   ret = base64_decode_mode( "QUI= ", outbuf, &outlen, DECODE_MODE_RELAXED );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 2, outbuf, "AB" );
 
-   ret = base64_decode_mode( "\tQUI= \n   ", outbuf, bufsize, DECODE_MODE_RELAXED );
-   check_return_result( ret, 2, outbuf, "AB" );
+   outlen = bufsize;
+   ret = base64_decode_mode( "\tQUI= \n   ", outbuf, &outlen, DECODE_MODE_RELAXED );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 2, outbuf, "AB" );
 
-   ret = base64_decode_mode( "QUJD    ", outbuf, bufsize, DECODE_MODE_RELAXED );
-   check_return_result( ret, 3, outbuf, "ABC" );
+   outlen = bufsize;
+   ret = base64_decode_mode( "QUJD    ", outbuf, &outlen, DECODE_MODE_RELAXED );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 3, outbuf, "ABC" );
 
-   ret = base64_decode_mode( "\tQUJD", outbuf, bufsize, DECODE_MODE_RELAXED );
-   check_return_result( ret, 3, outbuf, "ABC" );
+   outlen = bufsize;
+   ret = base64_decode_mode( "\tQUJD", outbuf, &outlen, DECODE_MODE_RELAXED );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 3, outbuf, "ABC" );
 
    /* Split sequence (successes, though not clearly defined in standard) */
-   ret = base64_decode( "QUI=QUJD", outbuf, bufsize );
-   check_return_result( ret, 5, outbuf, "ABABC" );
+   outlen = bufsize;
+   ret = base64_decode( "QUI=QUJD", outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 5, outbuf, "ABABC" );
 
-   ret = base64_decode_mode( "QUI=  QUJD", outbuf, bufsize, DECODE_MODE_RELAXED );
-   check_return_result( ret, 5, outbuf, "ABABC" );
+   outlen = bufsize;
+   ret = base64_decode_mode( "QUI=  QUJD", outbuf, &outlen, DECODE_MODE_RELAXED );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 5, outbuf, "ABABC" );
 
    /* Trailing garbage/incomplete sequences (failures) */
-   ret = base64_decode( "QQ==A", outbuf, bufsize );
-   check_return( ret, DECODE_MALFORMED_SEQUENCE );
+   outlen = bufsize;
+   ret = base64_decode( "QQ==A", outbuf, &outlen );
+   check_return_result( ret, DECODE_MALFORMED_SEQUENCE, outlen, 1, outbuf, "A" );
 
-   ret = base64_decode( "QUI=A", outbuf, bufsize );
-   check_return( ret, DECODE_MALFORMED_SEQUENCE );
+   outlen = bufsize;
+   ret = base64_decode( "QUI=A", outbuf, &outlen );
+   check_return_result( ret, DECODE_MALFORMED_SEQUENCE, outlen, 2, outbuf, "AB" );
 
-   ret = base64_decode( "QUJDA", outbuf, bufsize );
-   check_return( ret, DECODE_MALFORMED_SEQUENCE );
+   outlen = bufsize;
+   ret = base64_decode( "QUJDA", outbuf, &outlen );
+   check_return_result( ret, DECODE_MALFORMED_SEQUENCE, outlen, 3, outbuf, "ABC" );
 
    /* Decoding a sequence of all characters from 0x00 to 0xFF (success) */
    input =
@@ -573,18 +745,26 @@ static int test_base64()
       "tLW2t7i5uru8vb6/wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX"
       "2Nna29zd3t/g4eLj5OXm5+jp6uvs7e7v8PHy8/T19vf4+fr7"
       "/P3+/w==";
-   ret = base64_decode( input, outbuf, bufsize );
-   check_return_result( ret, 256, outbuf, sequence );
+   outlen = 256;
+   ret = base64_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 256, outbuf, sequence );
 
    /* Output buffer size test checks (including edge cases) */
-   ret = base64_decode( input, outbuf, 256 );
-   check_return_result( ret, 256, outbuf, sequence );
+   outlen = 255;
+   ret = base64_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_BUFFER_TOO_SMALL, outlen, 255, outbuf, sequence );
 
-   ret = base64_decode( input, outbuf, 255 );
-   check_return( ret, DECODE_BUFFER_TOO_SMALL );
+   outlen = 254;
+   ret = base64_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_BUFFER_TOO_SMALL, outlen, 252, outbuf, sequence );
 
-   ret = base64_decode( input, outbuf, 1 );
-   check_return( ret, DECODE_BUFFER_TOO_SMALL );
+   outlen = 2;
+   ret = base64_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_BUFFER_TOO_SMALL, outlen, 0, outbuf, sequence );
+
+   ret = base64_decode_alloc( input, &allocbuf, &outlen, DECODE_MODE_STRICT );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 256, allocbuf, sequence );
+   free(allocbuf);
 
    /* Decoding sequence of all characters from 0x00 to 0xFF
       with embedded line breaks */
@@ -597,8 +777,13 @@ static int test_base64()
       "tLW2t7i5uru8vb6/wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX\r\n"
       "2Nna29zd3t/g4eLj5OXm5+jp6uvs7e7v8PHy8/T19vf4+fr7\r\n"
       "/P3+/w==";
-   ret = base64_decode( input, outbuf, bufsize );
-   check_return_result( ret, 256, outbuf, sequence );
+   outlen = bufsize;
+   ret = base64_decode_mode( input, outbuf, &outlen, DECODE_MODE_CRLF_BREAKS );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 256, outbuf, sequence );
+
+   ret = base64_decode_alloc( input, &allocbuf, &outlen, DECODE_MODE_CRLF_BREAKS );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 256, allocbuf, sequence );
+   free(allocbuf);
 
    input =
       "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIj\r\n"
@@ -609,8 +794,9 @@ static int test_base64()
       "tLW2t7i5uru8vb6/wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX\r\n"
       "2Nna29zd3t/g4eLj5OXm5+jp6uvs7e7v8PHy8/T19vf4+fr7\r\n"
       "/P3+/w==\r\n";
-   ret = base64_decode( input, outbuf, bufsize );
-   check_return_result( ret, 256, outbuf, sequence );
+   outlen = bufsize;
+   ret = base64_decode_mode( input, outbuf, &outlen, DECODE_MODE_CRLF_BREAKS );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 256, outbuf, sequence );
 
    input =
       "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIj\r\n"
@@ -621,8 +807,9 @@ static int test_base64()
       "tLW2t7i5uru8vb6/wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX\r\n"
       "2Nna29zd3t/g4eLj5OXm5+jp6uvs7e7v8PHy8/T19vf4+fr7\r\n"
       "/P3+/w==";
-   ret = base64_decode( input, outbuf, bufsize );
-   check_return_result( ret, 256, outbuf, sequence );
+   outlen = bufsize;
+   ret = base64_decode_mode( input, outbuf, &outlen, DECODE_MODE_CRLF_BREAKS );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 256, outbuf, sequence );
 
    input =
       "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIj\r\n"
@@ -633,14 +820,18 @@ static int test_base64()
       "tLW2t7i5uru8vb6/wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX\r\n"
       "2Nna29zd3t/g4eLj5OXm5+jp6uvs7e7v8PHy8/T19vf4+fr7\r\n"
       "/P3+/w==";
-   ret = base64_decode( input, outbuf, bufsize );
-   check_return( ret, DECODE_INVALID_CHAR );
+   outlen = bufsize;
+   ret = base64_decode_mode( input, outbuf, &outlen, DECODE_MODE_CRLF_BREAKS );
+   check_return_result( ret, DECODE_INVALID_CHAR, outlen, 72, outbuf, sequence );
 
-   ret = base64_decode_mode( input, outbuf, bufsize, DECODE_MODE_LF_BREAKS );
-   check_return_result( ret, 256, outbuf, sequence );
+   outlen = bufsize;
+   ret = base64_decode_mode( input, outbuf, &outlen,
+      DECODE_MODE_CRLF_BREAKS | DECODE_MODE_LF_BREAKS );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 256, outbuf, sequence );
 
-   ret = base64_decode_mode( input, outbuf, bufsize, DECODE_MODE_WHITESPACE_OK );
-   check_return_result( ret, 256, outbuf, sequence );
+   outlen = bufsize;
+   ret = base64_decode_mode( input, outbuf, &outlen, DECODE_MODE_WHITESPACE_OK );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 256, outbuf, sequence );
 
    input =
       "  AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8gISIj\n"
@@ -651,14 +842,22 @@ static int test_base64()
       "  tLW2t7i5uru8vb6/wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX\n"
       " 2Nna29zd3t/g4eLj5OXm5+jp6uvs7e7v8PHy8/T19vf4+fr7\n"
       "  /P3+/w==";
-   ret = base64_decode( input, outbuf, bufsize );
-   check_return( ret, DECODE_INVALID_CHAR );
+   outlen = bufsize;
+   ret = base64_decode( input, outbuf, &outlen );
+   check_return_result( ret, DECODE_INVALID_CHAR, outlen, 0, outbuf, sequence );
 
-   ret = base64_decode_mode( input, outbuf, bufsize, DECODE_MODE_LF_BREAKS );
-   check_return( ret, DECODE_INVALID_CHAR );
+   outlen = bufsize;
+   ret = base64_decode_mode( input, outbuf, &outlen,
+      DECODE_MODE_CRLF_BREAKS | DECODE_MODE_LF_BREAKS );
+   check_return_result( ret, DECODE_INVALID_CHAR, outlen, 0, outbuf, sequence );
 
-   ret = base64_decode_mode( input, outbuf, bufsize, DECODE_MODE_WHITESPACE_OK );
-   check_return_result( ret, 256, outbuf, sequence );
+   outlen = bufsize;
+   ret = base64_decode_mode( input, outbuf, &outlen, DECODE_MODE_WHITESPACE_OK );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 256, outbuf, sequence );
+
+   ret = base64_decode_alloc( input, &allocbuf, &outlen, DECODE_MODE_WHITESPACE_OK );
+   check_return_result( ret, DECODE_SUCCESS, outlen, 256, allocbuf, sequence );
+   free(allocbuf);
 
    return ngood;
 }
@@ -666,41 +865,49 @@ static int test_base64()
 /* ========================= perror tests================================ */
 static int test_perror()
 {
-   int ret, ngood = 0;
+   size_t ret, ngood = 0;
    const char *msg, *str;
 
    /* Error messages */
+   str = "Success";
    ret = strlen( msg = decode_perror(0) );
-   check_return( ret, 8 );
-   check_return_result( ret+1, 9, msg, "No error" );
+   check_return_result( 1, 1, ret+1, strlen(str)+1, msg, str );
 
-   ret = strlen( decode_perror( DECODE_BADARG ) );
-   check_return_greater( ret, 8 );
+   str = "Bad function argument";
+   ret = strlen( msg = decode_perror( DECODE_BADARG ) );
+   check_return_result( 1, 1, ret+1, strlen(str)+1, msg, str );
 
-   ret = strlen( decode_perror( DECODE_INVALID_CHAR ) );
-   check_return_greater( ret, 8 );
+   str = "Cannot allocate buffer";
+   ret = strlen( msg = decode_perror( DECODE_BADALLOC ) );
+   check_return_result( 1, 1, ret+1, strlen(str)+1, msg, str );
 
-   ret = strlen( decode_perror( DECODE_MALFORMED_SEQUENCE ) );
-   check_return_greater( ret, 8 );
+   str = "Invalid character in input";
+   ret = strlen( msg = decode_perror( DECODE_INVALID_CHAR ) );
+   check_return_result( 1, 1, ret+1, strlen(str)+1, msg, str );
 
-   ret = strlen( decode_perror( DECODE_BUFFER_TOO_SMALL ) );
-   check_return_greater( ret, 8 );
+   str = "Invalid sequence of characters in input";
+   ret = strlen( msg = decode_perror( DECODE_MALFORMED_SEQUENCE ) );
+   check_return_result( 1, 1, ret+1, strlen(str)+1, msg, str );
 
-   ret = strlen( decode_perror( DECODE_INPUT_TOO_LONG ) );
-   check_return_greater( ret, 8 );
+   str = "Output buffer size too small";
+   ret = strlen( msg = decode_perror( DECODE_BUFFER_TOO_SMALL ) );
+   check_return_result( 1, 1, ret+1, strlen(str)+1, msg, str );
 
-   ret = strlen( decode_perror( DECODE_LOWERCASE_HEX ) );
-   check_return_greater( ret, 8 );
+   str = "Lowercase hex character following '='";
+   ret = strlen( msg = decode_perror( DECODE_LOWERCASE_HEX ) );
+   check_return_result( 1, 1, ret+1, strlen(str)+1, msg, str );
 
-   ret = strlen( decode_perror( DECODE_LINE_TOO_LONG ) );
-   check_return_greater( ret, 8 );
+   str = "Quoted-printable line longer than 76 characters";
+   ret = strlen( msg = decode_perror( DECODE_LINE_TOO_LONG ) );
+   check_return_result( 1, 1, ret+1, strlen(str)+1, msg, str );
 
-   ret = strlen( decode_perror( DECODE_WHITESPACE_IN_SOFTBREAK ) );
-   check_return_greater( ret, 8 );
+   str = "Quoted-printable softbreak padded with whitespace";
+   ret = strlen( msg = decode_perror( DECODE_WHITESPACE_IN_SOFTBREAK ) );
+   check_return_result( 1, 1, ret+1, strlen(str)+1, msg, str );
 
-   msg = decode_perror(-255);
-   str = "Unknown error code";
-   check_return_result( (int)strlen(msg), (int)strlen(str), msg, str );
+   str = "Unknown return code";
+   ret = strlen( msg = decode_perror(255) );
+   check_return_result( 1, 1, ret+1, strlen(str)+1, msg, str );
 
    return ngood;
 }
